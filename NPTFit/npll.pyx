@@ -96,20 +96,6 @@ def log_like(pt_sum_compressed, theta, f_ary, df_rho_div_f_ary, npt_compressed,
 @cython.wraparound(False)
 @cython.cdivision(True)
 @cython.initializedcheck(False)
-cdef double MultiNomCoeff(int[:] comb):
-    cdef Py_ssize_t a,j
-    cdef double res=1, i = 1
-    for a in range(len(comb)):
-        for j in range(1,comb[a]+1):
-            res *= i
-            res //= j
-            i += 1
-    return res 
-
-@cython.boundscheck(False)
-@cython.wraparound(False)
-@cython.cdivision(True)
-@cython.initializedcheck(False)
 cdef double log_like_internal(double[::1] pt_sum_compressed, int[:,::1] data, int[::1] data_sum,
                               double[:,:,::1] x_m_ary, double[:,::1] x_m_sum, 
                               int k_max, int npixROI, double[:,::1] lambda_i):
@@ -134,8 +120,6 @@ cdef double log_like_internal(double[::1] pt_sum_compressed, int[:,::1] data, in
     cdef double f0_ary=0, f1_ary=0
     cdef double[:,::1] pk = np.zeros((nTemp,k_max+1), dtype=DTYPE)
 
-    cdef int[::1] data_loc = np.zeros(nTemp, dtype=np.int32)
-    cdef int data_sum_loc = 0
     cdef double term = 0.
     cdef double term_comb = 0.
     
@@ -145,13 +129,12 @@ cdef double log_like_internal(double[::1] pt_sum_compressed, int[:,::1] data, in
     comb_len[0] = 1
     for n in range(k_max):
         comb_len[n+1] = <int>binom(nTemp+n,nTemp-1)
-        comb_off[n+1] = comb_off[n] + comb_len[n+1] -1
+        comb_off[n+1] = comb_off[n] + comb_len[n] 
 
     cdef int[:,::1] comb_list = np.zeros((comb_off[k_max]+comb_len[k_max],nTemp),dtype=np.int32)
+    cdef int offset = 0
     for n in range(k_max+1):
-        for k1 in range(n+1):
-            comb_list[comb_off[n]+k1][0] = k1
-            comb_list[comb_off[n]+k1][1] = n-k1
+        RecAssign(nTemp,&offset,comb_list,0,n)
 
     cdef double[:,:,::1] powLambda = np.zeros((nTemp,nBins,k_max+1), dtype=DTYPE)
     for t in range(nTemp):
@@ -159,6 +142,9 @@ cdef double log_like_internal(double[::1] pt_sum_compressed, int[:,::1] data, in
             for k in range(k_max+1):
                 powLambda[t][n][k] = lambda_i[t][n]**k 
                 
+    cdef int[::1] comb_beta = np.zeros( nBins, dtype=np.int32)
+    cdef double result = 0
+
     # Loop over pixels
     for p in range(npixROI):
         for t in range(nTemp):
@@ -176,19 +162,64 @@ cdef double log_like_internal(double[::1] pt_sum_compressed, int[:,::1] data, in
                     pk[t][k] += (k-n)/float(k)*x_m_ary[t,p,k-n]*pk[t][n]
                 pk[t][k] += f1_ary*pk[t][k-1]/float(k)
 
-        term_comb = 0
-        for i in range(comb_len[data[0,p]]):
-            for j in range(comb_len[data[1,p]]):
-                term = 1
-                for t in range(nTemp):
-                    data_loc[0] = comb_list[comb_off[data[0,p]]+i][t]
-                    data_loc[1] = comb_list[comb_off[data[1,p]]+j][nTemp-t-1]
-                    data_sum_loc = sum(data_loc) 
-
-                    term *=  MultiNomCoeff(data_loc) * pk[t][data_sum_loc]
-                    for k in range(nBins):
-                        term *= powLambda[t][k][data_loc[k]]
-                term_comb += term
-        ll += log(term_comb)
+            result = 0
+            RecBeta(0,nBins,nTemp, p, comb_off, comb_len, comb_list, comb_beta, pk, powLambda, data, &result)
+        ll += log(result)
 
     return ll
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+@cython.initializedcheck(False)
+cdef RecBeta(int b,int nBins,int nTemp,int p, int[::1] comb_off, int[::1] comb_len, int[:,::1] comb_list, int[::1] comb_beta, 
+             double[:,::1] pk, double[:,:,::1] powLambda, int[:,::1] data, double *res):
+    cdef double term = 1.
+    cdef int[:,::1] beta = np.zeros((nTemp,nBins), dtype=np.int32)
+    cdef int[::1] beta_sum = np.zeros(nTemp,dtype=np.int32)
+ 
+    if nBins == b:
+        for i in range(nTemp):
+            for j in range(nBins):
+                beta[i][j] = comb_list[ comb_off[ data[j,p] ] + comb_beta[j] ][i]
+            beta_sum[i] = sum(beta[i])
+
+            term *=  MultiNomCoeff(beta[i]) * pk[i][ beta_sum[i] ]
+            for j in range(nBins):
+                term *= powLambda[i][j][ beta[i][j] ]
+        res[0] += term
+    else:
+        for i in range(comb_len[data[b,p]]):
+            comb_beta[b] = i
+            RecBeta( b+1, nBins, nTemp, p, comb_off, comb_len, comb_list, comb_beta, pk, powLambda, data, &res[0] )
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+@cython.initializedcheck(False)
+cdef double MultiNomCoeff(int[:] comb):
+    cdef Py_ssize_t a,j
+    cdef double res=1, i = 1
+    for a in range(len(comb)):
+        for j in range(1,comb[a]+1):
+            res *= i
+            res //= j
+            i += 1
+    return res 
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+@cython.initializedcheck(False)
+cdef RecAssign(int nTemp,int *offset,int[:,::1] comb_list,int temp,int k):
+    cdef int off_loc
+    if nTemp-1 == temp:
+        comb_list[offset[0]][temp] = k
+        offset[0] += 1 
+    else:
+        for n in range(k+1):
+            off_loc = offset[0]
+            RecAssign(nTemp,&offset[0],comb_list,temp+1,k-n)
+            for s in range(off_loc,offset[0]):
+                comb_list[s][temp] = n 
+
