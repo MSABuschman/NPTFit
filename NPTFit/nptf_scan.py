@@ -16,6 +16,7 @@
 from __future__ import print_function
 from __future__ import absolute_import
 
+import sys
 import copy
 import numpy as np
 import pymultinest
@@ -72,8 +73,8 @@ class NPTFScan(ConfigMaps):
                                                 'log_prior': log_prior,
                                                 'model_tag': model_tag}
 
-    def add_non_poiss_model(self, template_name, model_tag, prior_range=[],
-                            log_prior=False, dnds_model='specify_breaks',
+    def add_non_poiss_model(self, template_name, e_dependence, model_tag, prior_range=[],
+                            log_prior=False, is_e_param=False, dnds_model='specify_breaks',
                             fixed_params=None, units='counts'):
         """ Add a non-Poissonian model corresponding to a template.
 
@@ -111,7 +112,7 @@ class NPTFScan(ConfigMaps):
 
         # If fixed parameters, use masks to account for which values to skip
         if fixed_params is None:
-            n_params = len(model_tag)
+            n_params = len(model_tag) 
         else:
             n_params = len(model_tag) - len(fixed_params)
             fixed_params = np.array(fixed_params)
@@ -121,9 +122,12 @@ class NPTFScan(ConfigMaps):
 
         # Add template to non_poiss_models dictionary
         self.non_poiss_models[template_name] = {'prior_range': prior_range,
+                                                'e_dependence': e_dependence,
+                                                'is_e_param': is_e_param,
                                                 'log_prior': log_prior_list,
                                                 'model_tag': model_tag,
                                                 'n_params': n_params,
+                                                'n_e_params': sum(is_e_param),
                                                 'dnds_model': dnds_model,
                                                 'fixed_params': fixed_params,
                                                 'n_params_total': n_params,
@@ -196,7 +200,8 @@ class NPTFScan(ConfigMaps):
             # If relative, just adjust the highest break
             if is_flux and is_relative:
                 npt_params = self.non_poiss_models[key]['n_params_total']
-                npt_breaks = int((npt_params - 2) / 2)
+                npt_e_params = self.non_poiss_models[key]['n_e_params']
+                npt_breaks = int((npt_params - npt_e_params - 2) / 2)
                 break_locs = range(npt_breaks + 2, 2 * npt_breaks + 2)
                 highest_break = npt_breaks + 2
 
@@ -217,7 +222,7 @@ class NPTFScan(ConfigMaps):
                 if highest_floated:
                     floated_breaks = npt_breaks - fixed_breaks
                     floated_params = self.non_poiss_models[key]['n_params']
-                    hloc = floated_params - floated_breaks
+                    hloc = floated_params - floated_breaks 
                     if self.non_poiss_models[key]['log_prior'][hloc] == True:
                         self.non_poiss_models[key]['prior_range'][hloc][0] += \
                             np.log10(self.exposure_mean)
@@ -232,7 +237,8 @@ class NPTFScan(ConfigMaps):
             # If not relative, adjust all breaks
             if is_flux and not is_relative:
                 npt_params = self.non_poiss_models[key]['n_params_total']
-                npt_breaks = int((npt_params - 2) / 2)
+                npt_e_params = self.non_poiss_models[key]['n_e_params']
+                npt_breaks = int((npt_params - npt_e_params - 2) / 2)
                 break_locs = range(npt_breaks + 2, 2 * npt_breaks + 2)
 
                 # Check if there are any fixed breaks and adjust
@@ -307,7 +313,6 @@ class NPTFScan(ConfigMaps):
             Specifically calculate the sum of the Poissonian templates (fixed
             and floated) and get the list of NPT parameters
         """
-
         # Setup array of template normalisations (poissonian)
         a_theta = []
         if self.n_poiss != 0:
@@ -342,9 +347,10 @@ class NPTFScan(ConfigMaps):
             pt_sum_compressed = pt_sum_compressed_float
 
         # If no Poissonian templates, pt_sum_compressed set to a zero array
+        # ToDo: Rewrite
         if (self.n_poiss + len(self.poiss_models_fixed)) == 0:
             pt_sum_compressed = np.array([np.zeros(
-                len(self.masked_compressed_data_expreg[region]))
+                len(self.masked_compressed_data_expreg[0][region]))
                                           for region in range(self.nexp)])
 
         # Setup array of NPT parameters - adding the fixed parameters back in
@@ -379,16 +385,16 @@ class NPTFScan(ConfigMaps):
         # [0, 1, ..., nb+1, nb+2, ..., 2nb+1]
 
         # Determine the number of breaks and total parameters for each NPT
-        nbreak_ary = [int((val['n_params_total'] - 2) / 2.)
+        nbreak_ary = [int((val['n_params_total'] - val['n_e_params'] - 2) / 2.)
                       for val in self.non_poiss_models.values()]
-        nparams_ary = [int(val['n_params_total'])
+        nparams_ary = [int(val['n_params_total']) - val['n_e_params']
                        for val in self.non_poiss_models.values()]
 
         # Determine where each NPT model begins in the full theta_ps array
         offset_indices_ary = [0]
         for i in range(1, self.n_non_poiss_models):
             offset_indices_ary.append(offset_indices_ary[i - 1] +
-                                      nparams_ary[i - 1])
+                                      nparams_ary[i - 1] + val['n_e_params'])
 
         theta_ps_ary = []
 
@@ -422,7 +428,6 @@ class NPTFScan(ConfigMaps):
         """ Pass all details to the likelihood evaluator, and define the total
             ll to be the sum of that in each of the exposure regions
         """
-
         ll = 0.0
         for i in range(self.nexp):
             # For each NPT template adjust the breaks to account for the
@@ -436,13 +441,32 @@ class NPTFScan(ConfigMaps):
                                for j in
                                range(len(self.NPT_dist_compressed_exp_ary))]
 
+            #ToDo: Improve           
+            for t in range(len(theta_ps_expreg)):
+                theta_ps_expreg[t].append(self.ebins)
+                theta_ps_expreg[t].append( self.non_poiss_models[self.non_poiss_models_keys[t]]['e_dependence'] )
+                Eparam = []
+                for p in range(len(self.non_poiss_models[self.non_poiss_models_keys[t]]['is_e_param'])):
+                    if self.non_poiss_models[self.non_poiss_models_keys[t]]['is_e_param'][p] == True: 
+                        Eparam.append( self.e_theta[t*self.non_poiss_models[self.non_poiss_models_keys[t]]['n_params']+p] )
+                theta_ps_expreg[t].append(np.array(Eparam))
+
+            theta_ps_expreg = np.array(theta_ps_expreg)
+
             # In evaluating the likelihood extract the exposure region i
             # version of each parameter
+
+            # Restrcture data because it's fucked up somewhere else
+            # Todo: Improve
+            rear = []
+            for b in range(len(self.ebins)-1):
+                rear.append( self.masked_compressed_data_expreg[b][0] )
+
             ll += npll.log_like(self.PT_sum_compressed[i], theta_ps_expreg,
                                 self.f_ary, self.df_rho_div_f_ary,
                                 [NPT[i] for NPT in
                                  self.NPT_dist_compressed_exp_ary],
-                                self.masked_compressed_data_expreg[i])
+                                np.array(rear))
         return ll
 
     def log_like_nptf(self, theta, ndim=1, nparams=1):
@@ -457,6 +481,7 @@ class NPTFScan(ConfigMaps):
         self.nbreak_ary = [int((len(self.theta_ps[j]) - 2) / 2.)
                            for j in range(len(self.theta_ps))]
         self.PT_sum_compressed = pt_sum_compressed
+        self.e_theta = theta
 
         return self.make_ll()
 

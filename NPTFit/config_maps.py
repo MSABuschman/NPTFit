@@ -35,24 +35,27 @@ class ConfigMaps(SetDirs):
         self.count_map = []
         self.exposure_map = []
         self.mask_total = []
+        self.ebins = []
 
         # Initialise template dictionary and array
         self.templates = []
         self.templates_dict = {}
 
-    def load_data(self, count_map, exposure_map):
+    def load_data(self, count_map, exposure_map, ebins):
         """ Function to input analysis data
 
             :param count_map: A map of counts (integers)
             :param exposure_map: A map of the exposure
         """
 
-        # Check the counts map is an array of integers
-        assert (all(isinstance(p, np.int32) for p in count_map)), \
-            "Data must be an array of counts (python integers)"
+       	# Check the counts map is an array of integers
+        # ToDo: Generalise test
+        assert (all(isinstance(p, np.int32) for p in count_map[0])), \
+            "Data must be an array of an array of counts (python integers)"
 
         self.count_map = count_map
         self.exposure_map = exposure_map
+        self.ebins = ebins
 
     def load_mask(self, external_mask):
         """ Function to input analysis mask
@@ -116,7 +119,8 @@ class ConfigMaps(SetDirs):
             "Must load a template before setting up the scan"
 
         # Number of pixels is fixed to be the length of the count_map
-        self.npix = len(self.count_map)
+        # ToDo: Generalise
+        self.npix = len(self.count_map[0])
 
         # If no mask inserted, set to blank mask
         if len(self.mask_total) == 0:
@@ -132,14 +136,17 @@ class ConfigMaps(SetDirs):
             assert(len(self.templates_dict[key]) == self.npix), \
                 key + " has a different shape to the data"
 
-        # Compress data - this is used for a Poissonian scan
-        temp_data = ma.masked_array(data=self.count_map, mask=self.mask_total)
-        # Convert map to int32 array - Cython considers int64s to be floats
-        self.masked_compressed_data = \
-            np.array(temp_data.compressed(), dtype='int32')
+        self.masked_compressed_data = []
+        for b in range(len(self.count_map)):
+            # Compress data - this is used for a Poissonian scan
+            temp_data = ma.masked_array(data=self.count_map[b], mask=self.mask_total)
+            # Convert map to int32 array - Cython considers int64s to be floats
+            self.masked_compressed_data.append( \
+                np.array(temp_data.compressed(), dtype='int32') )
 
         # Check the user has not accidentally masked the entire sky
-        assert(len(self.masked_compressed_data != 0)), \
+        # ToDo: Generalise 
+        assert(len(self.masked_compressed_data[0] != 0)), \
             "The entire sky has been masked - there is nothing to scan over"
 
         # Divide the map into exposure regions
@@ -147,12 +154,14 @@ class ConfigMaps(SetDirs):
 
         # Create an exposure region corrected version of the data
         self.masked_compressed_data_expreg = []
-        for i in range(self.nexp):
-            temp_data_expreg = ma.masked_array(data=self.count_map,
-                                               mask=self.expreg_mask[i])
-            # Again convert to int32
-            self.masked_compressed_data_expreg.append(np.array(
-                 temp_data_expreg.compressed(), dtype='int32'))
+        for b in range(len(self.count_map)):
+            temp_masked_compressed_data_expreg = []
+            for i in range(self.nexp):
+                temp_data_expreg = ma.masked_array(data=self.count_map[b],
+                                                   mask=self.expreg_mask[i])
+                # Again convert to int32
+                temp_masked_compressed_data_expreg.append(np.array(temp_data_expreg.compressed(), dtype='int32'))
+            self.masked_compressed_data_expreg.append( temp_masked_compressed_data_expreg )
 
         # Create a nested dictionary of different versions of the templates
         the_dict = self.templates_dict

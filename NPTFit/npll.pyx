@@ -55,7 +55,6 @@ def log_like(pt_sum_compressed, theta, f_ary, df_rho_div_f_ary, npt_compressed,
         double log likelihood
 
     """
-
     cdef int nTheta = len(theta)
     cdef int nBins = len(theta[0,-3]) - 1
 
@@ -83,7 +82,7 @@ def log_like(pt_sum_compressed, theta, f_ary, df_rho_div_f_ary, npt_compressed,
                                        npt_compressed[i], data_sum)
 
         x_m_ary[i] = x_m_ary_out
-        x_m_sum[i] = np.asarray(x_m_sum_out)
+        x_m_sum[i] = x_m_sum_out
 
         norm[i] = integrate.quad( lambda x: theta[i,-2](x,theta[i,-1]), theta[i,-3][0], theta[i,-3][nBins] )[0]
         for b in range(nBins):
@@ -122,7 +121,7 @@ cdef double log_like_internal(double[::1] pt_sum_compressed, int[:,::1] data, in
 
     cdef double term = 0.
     cdef double term_comb = 0.
-    
+ 
     cdef int[::1] comb_off = np.zeros(k_max+1, dtype=np.int32)
     cdef int[::1] comb_len = np.zeros(k_max+1, dtype=np.int32)
 
@@ -141,7 +140,7 @@ cdef double log_like_internal(double[::1] pt_sum_compressed, int[:,::1] data, in
         for n in range(nBins):
             for k in range(k_max+1):
                 powLambda[t][n][k] = lambda_i[t][n]**k 
-                
+ 
     cdef int[::1] comb_beta = np.zeros( nBins, dtype=np.int32)
     cdef double result = 0
 
@@ -164,7 +163,11 @@ cdef double log_like_internal(double[::1] pt_sum_compressed, int[:,::1] data, in
 
             result = 0
             RecBeta(0,nBins,nTemp, p, comb_off, comb_len, comb_list, comb_beta, pk, powLambda, data, &result)
-        ll += log(result)
+
+        if result > 0:
+            ll += log(result)
+        else:
+            ll += -10.1**10.
 
     return ll
 
@@ -177,7 +180,7 @@ cdef RecBeta(int b,int nBins,int nTemp,int p, int[::1] comb_off, int[::1] comb_l
     cdef double term = 1.
     cdef int[:,::1] beta = np.zeros((nTemp,nBins), dtype=np.int32)
     cdef int[::1] beta_sum = np.zeros(nTemp,dtype=np.int32)
- 
+
     if nBins == b:
         for i in range(nTemp):
             for j in range(nBins):
